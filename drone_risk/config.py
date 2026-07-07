@@ -67,4 +67,6 @@ RGB = {
     "min_len_frac": 0.10,       # 이미지 대각선의 10% 이상 길이만 후보
     "max_candidates": 25,       # 표시할 의심 지점 최대 수(진하고 긴 순)
     "min_contrast": 10,         # 전체 대비 이 미만이면 사진 품질 '낮음' 경고
+    # AI 제안 등급(참고용) 산출 — 가장 강한 후보 강도 + 후보 수 → concern → A~E
+    "suggest": {"top_ref": 0.22, "cnt_ref": 18.0, "w_top": 0.7, "w_cnt": 0.3},
 }

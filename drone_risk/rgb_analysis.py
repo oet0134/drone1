@@ -1,11 +1,11 @@
-"""일반(RGB) 사진 결함 '후보 표시' — 사람 판단 보조(Human-in-the-loop).
+"""일반(RGB) 사진 결함 분석 — AI 제안 + 사람 확정(Human-in-the-loop).
 
-★ 자동 등급을 매기지 않는다. 단순 영상처리로는 진짜 균열과 창틀·벽돌 줄눈·
-   구조선을 구분할 수 없기 때문(실측으로 확인됨). 대신 '균열처럼 보이는
-   길고 진한 어두운 선'만 보수적으로 골라 빨간 박스로 표시하고, 최종 등급은
-   사람이 지정한다(그 판단이 학습 데이터로 쌓인다).
+★ AI 등급은 '참고용 제안'이다. 단순 영상처리로는 진짜 균열과 창틀·줄눈을
+   완벽히 구분할 수 없으므로(실측 확인됨), AI가 대략적인 제안 등급과 의심 지점만
+   주고, 최종 등급은 사람이 확정한다(그 확정이 학습 데이터가 되고, AI 제안 대비
+   사람 확정을 비교해 모델 정확도를 추적한다).
 
-재사용: 연결요소 라벨링(imaging), PCA 길쭉함.
+재사용: 연결요소 라벨링(imaging), A~E 등급 매핑(risk_engine.to_grade).
 """
 from __future__ import annotations
 import io
@@ -14,6 +14,12 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from .config import RGB
 from .imaging import label_components
+from .contracts import RiskScore, EngineMeta
+from .risk_engine import to_grade, _clamp
+
+
+def _norm(x, ref):
+    return max(0.0, min(1.0, x / ref)) if ref > 0 else 0.0
 
 
 def _pca_elong(cells) -> float:
@@ -49,7 +55,7 @@ def analyze_photo(image_bytes: bytes) -> dict:
     diag = (W * W + H * H) ** 0.5
     min_len = cfg["min_len_frac"] * diag
 
-    # 길고(min_len↑) 길쭉하고(elong↑) 진한(dark↑) 것만 후보로. 진하고 긴 순 상위 N개.
+    # 길고·길쭉하고·진한 것만 후보로. 정규화 강도(promn)와 함께 보관.
     cands = []
     for c in comps:
         r0, c0, bh, bw = c["bbox"]
@@ -60,12 +66,24 @@ def analyze_photo(image_bytes: bytes) -> dict:
             continue
         idx = np.array(list(c["cells"]))
         dmean = float(dark[idx[:, 0], idx[:, 1]].mean())
-        cands.append({"bbox": (r0, c0, bh, bw), "prom": length * dmean})
+        promn = (length / diag) * (dmean / 255.0)          # 정규화 강도 0~1
+        cands.append({"bbox": (r0, c0, bh, bw), "prom": length * dmean, "promn": promn})
     cands.sort(key=lambda x: -x["prom"])
     cands = cands[:cfg["max_candidates"]]
 
     contrast = float(gray_raw.std())
     quality = "low" if contrast < cfg["min_contrast"] else "ok"
+
+    # AI 제안 등급(참고용): 가장 강한 후보의 강도 + 후보 수 → concern → A~E
+    s = cfg["suggest"]
+    top = max((c["promn"] for c in cands), default=0.0)
+    concern = _clamp(s["w_top"] * _norm(top, s["top_ref"])
+                     + s["w_cnt"] * _norm(len(cands), s["cnt_ref"]))
+    if quality == "low":
+        suggested = "HOLD"                                  # 흐려서 판단 곤란
+    else:
+        suggested = to_grade(RiskScore("photo", round(concern, 3), 1.0, {},
+                                       EngineMeta("rgb-assist", "0.3.0")))
 
     # 의심 지점에 빨간 박스
     ann = img.copy()
@@ -77,8 +95,10 @@ def analyze_photo(image_bytes: bytes) -> dict:
     ann.save(buf, format="JPEG", quality=80)
 
     return {
-        "num_candidates": len(cands),     # 사람이 검토할 의심 지점 수 (등급 아님)
-        "photo_quality": quality,         # "ok" | "low"(대비 낮아 판단 곤란)
+        "suggested_grade": suggested,     # AI 제안(참고용) — 사람이 확정/수정
+        "concern": round(concern, 3),
+        "num_candidates": len(cands),     # 사람이 검토할 의심 지점 수
+        "photo_quality": quality,         # "ok" | "low"
         "annotated_jpg": buf.getvalue(),
-        "engine": {"type": "rgb-assist", "version": "0.2.0"},
+        "engine": {"type": "rgb-assist", "version": "0.3.0"},
     }

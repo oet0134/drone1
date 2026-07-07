@@ -79,7 +79,7 @@
 
   <div class="panel-box">
     <div style="font-weight:600;margin-bottom:4px">📷 드론 사진 분석 (일반 카메라 · 사람 판단 보조)</div>
-    <div class="muted" style="margin-bottom:10px">Mavic 3 등으로 찍은 외벽 사진을 올리면 <b>균열로 의심되는 지점을 빨간 박스로 표시</b>합니다. 자동 등급이 아니라, <b>사람이 확인 후 등급을 지정</b>하면 그 판단이 학습 데이터로 쌓입니다. (jpg·png·avif 지원)</div>
+    <div class="muted" style="margin-bottom:10px">Mavic 3 등으로 찍은 외벽 사진을 올리면 <b>AI가 등급을 먼저 제안</b>하고 <b>의심 지점을 빨간 박스로 표시</b>합니다. AI 제안은 참고용이며, <b>사람이 확인해 확정</b>하면 최종 등급이 되고 학습 데이터로 쌓입니다. (jpg·png·avif 지원)</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="text" id="phBuilding" placeholder="건물/현장 이름 (선택)" style="min-width:150px">
       <input type="file" id="phFile" accept="image/*" multiple>
@@ -123,21 +123,23 @@ async function load(){
 function renderPhotos(list){
   const host=document.getElementById('photos');
   host.innerHTML = list.length ? list.map(p=>{
-    const g=p.human_grade;
-    const badge = g ? `<span class="badge" style="background:${COLOR[g]}">${LABEL[g]}</span>`
-                    : `<span class="badge" style="background:#5a6675;color:#fff">미판정</span>`;
+    const ai=p.ai_grade, hg=p.human_grade, sel=hg||ai||'A';
+    const badge = hg
+      ? `<span class="badge" style="background:${COLOR[hg]}">${LABEL[hg]}</span><span class="muted" style="font-size:11px">사람 확정</span>`
+      : `<span class="badge" style="background:${COLOR[ai]||'#5a6675'}">${LABEL[ai]||ai}</span><span class="muted" style="font-size:11px">AI 제안</span>`;
     const qual = p.photo_quality==='low'
       ? `<div style="color:#f0a020;font-size:12px;margin-top:4px">⚠ 사진 대비가 낮아 판단이 어려울 수 있어요</div>` : '';
-    const opts=['A','B','C','D','E','HOLD'].map(x=>`<option value="${x}" ${x===g?'selected':''}>${LABEL[x]}</option>`).join('');
+    const opts=['A','B','C','D','E','HOLD'].map(x=>`<option value="${x}" ${x===sel?'selected':''}>${LABEL[x]}</option>`).join('');
+    const aiNote = hg ? ` · AI 제안 ${LABEL[ai]||ai}` : '';
     return `<div class="card" style="padding:0;overflow:hidden">
       <img src="${p.image_url}" style="width:100%;display:block;max-height:200px;object-fit:cover">
       <div style="padding:10px 12px">
         <div style="display:flex;align-items:center;gap:8px">${badge}<span style="font-weight:600">${p.building||'현장 사진'}</span></div>
-        <div class="muted" style="margin-top:6px;font-size:12px">의심 지점 <b>${p.num_candidates}개</b> 표시됨 (빨간 박스) · 확인 후 등급 지정</div>
+        <div class="muted" style="margin-top:6px;font-size:12px">의심 지점 <b>${p.num_candidates}개</b> (빨간 박스)${aiNote} · 확인 후 등급 확정</div>
         ${qual}
         <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
           <select id="pg_${p.id}" style="flex:1">${opts}</select>
-          <button class="primary" onclick="gradePhoto('${p.id}')">등급 저장</button>
+          <button class="primary" onclick="gradePhoto('${p.id}')">${hg?'수정':'확정'}</button>
         </div>
       </div></div>`;
   }).join('') : '<div class="muted">아직 분석한 사진이 없습니다. 위에서 사진을 올려보세요.</div>';

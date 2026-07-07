@@ -18,10 +18,11 @@ def _wall():
 
 
 class TestRgbAssist(unittest.TestCase):
-    def test_no_auto_grade(self):
+    def test_suggests_grade_for_human(self):
         r = analyze_photo(_jpg(_wall()))
-        self.assertNotIn("grade", r)              # 자동 등급을 매기지 않는다
+        self.assertIn(r["suggested_grade"], {"A", "B", "C", "D", "E", "HOLD"})  # AI 제안(참고용)
         self.assertIn("num_candidates", r)
+        self.assertNotIn("grade", r)              # 최종'확정'이 아니라 제안일 뿐
 
     def test_clean_wall_few_candidates(self):
         r = analyze_photo(_jpg(_wall()))

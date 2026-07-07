@@ -232,9 +232,11 @@ class Handler(BaseHTTPRequestHandler):
                 "id": pid,
                 "building": body.get("building", "현장 사진"),
                 "filename": body.get("filename", ""),
-                "num_candidates": result["num_candidates"],  # 의심 지점 수(등급 아님)
+                "ai_grade": result["suggested_grade"],       # AI 제안(참고용)
+                "concern": result["concern"],
+                "num_candidates": result["num_candidates"],  # 의심 지점 수
                 "photo_quality": result["photo_quality"],
-                "human_grade": None, "note": "",             # 등급은 사람이 지정
+                "human_grade": None, "note": "",             # 사람이 확정(= 최종 + 학습)
                 "image_url": f"/uploads/{pid}.jpg", "engine": result["engine"],
             }
             with open(os.path.join(PHOTOS, pid + ".json"), "w", encoding="utf-8") as f:
