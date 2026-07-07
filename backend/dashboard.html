@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>드론 외벽 위험도 대시보드</title>
+<style>
+  :root{
+    --A:#388e3c; --B:#9ccc65; --C:#fbc02d; --D:#f57c00; --E:#d32f2f; --HOLD:#757575;
+    --bg:#0f1419; --card:#1b232d; --line:#2c3744; --txt:#e6edf3; --dim:#9aa7b4; --accent:#3d8bfd;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--txt)}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  h1{font-size:18px;margin:0}
+  .muted{color:var(--dim);font-size:13px}
+  .wrap{padding:20px 24px;max-width:1100px;margin:0 auto}
+  .panel-box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:18px}
+  .alerts{background:#3a1416;border:1px solid var(--A)}
+  .alerts h2{font-size:14px;margin:0 0 8px;color:#ff8a80}
+  .alert-row{font-size:13px;padding:3px 0;color:#ffcdd2}
+  .alert-row b{color:#fff}
+  .train{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+  .train .big{font-size:24px;font-weight:800}
+  .train .lbl{font-size:12px;color:var(--dim)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px}
+  .card-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .card-head .bid{font-weight:600;font-size:15px}
+  .badge{padding:3px 10px;border-radius:20px;font-weight:700;font-size:13px;color:#111}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:10px}
+  .zone{position:relative;border-radius:10px;padding:12px;cursor:pointer;color:#111;border:2px solid transparent}
+  .zone:hover{border-color:#fff8}
+  .zone .zid{font-weight:600;font-size:13px}
+  .zone .zg{font-size:22px;font-weight:800;margin-top:2px}
+  .zone .zs{font-size:11px;opacity:.85}
+  .tag{position:absolute;top:6px;right:6px;font-size:10px;font-weight:700;background:#0008;color:#fff;border-radius:10px;padding:1px 6px}
+  .legend{display:flex;gap:12px;font-size:12px;color:var(--dim)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  .panel{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:9}
+  .panel.open{display:flex}
+  .sheet{background:var(--card);border:1px solid var(--line);border-radius:14px;width:min(540px,92vw);max-height:90vh;overflow:auto;padding:20px 22px}
+  .sheet h3{margin:0 0 4px}
+  .row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .row span:first-child{color:var(--dim)}
+  .action{margin-top:14px;padding:10px 12px;border-radius:8px;font-size:13px;font-weight:600}
+  .x{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
+  button{background:#243042;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+  button:hover{background:#2e3d52}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .learn{margin-top:16px;padding:14px;border:1px dashed var(--accent);border-radius:10px;background:#12243d}
+  .learn h4{margin:0 0 4px;font-size:14px;color:#cfe2ff}
+  select,input[type=text]{background:#0f1722;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🛰️ 드론 외벽 위험도 대시보드</h1>
+    <div class="muted">외장재 탈락·구조 안전 · 열화상+초음파 · A(안전)~E(위험) · 국가 시설물 안전등급 방향</div>
+  </div>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+    <div style="display:flex;gap:8px">
+      <button onclick="seed()">＋ 예시 데이터 채우기</button>
+      <button onclick="load()">새로고침</button>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--A)"></i>A</span>
+      <span><i class="dot" style="background:var(--B)"></i>B</span>
+      <span><i class="dot" style="background:var(--C)"></i>C</span>
+      <span><i class="dot" style="background:var(--D)"></i>D</span>
+      <span><i class="dot" style="background:var(--E)"></i>E</span>
+      <span><i class="dot" style="background:var(--HOLD)"></i>보류</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="train"></div>
+
+  <div class="panel-box">
+    <div style="font-weight:600;margin-bottom:4px">📷 드론 사진 분석 (일반 카메라 · 사람 판단 보조)</div>
+    <div class="muted" style="margin-bottom:10px">Mavic 3 등으로 찍은 외벽 사진을 올리면 <b>균열로 의심되는 지점을 빨간 박스로 표시</b>합니다. 자동 등급이 아니라, <b>사람이 확인 후 등급을 지정</b>하면 그 판단이 학습 데이터로 쌓입니다. (jpg·png·avif 지원)</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="phBuilding" placeholder="건물/현장 이름 (선택)" style="min-width:150px">
+      <input type="file" id="phFile" accept="image/*" multiple>
+      <button class="primary" id="phBtn" onclick="analyzePhoto()">분석하기</button>
+      <span id="phStatus" class="muted"></span>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">여러 장을 한 번에 선택할 수 있어요. 큰 사진은 올리기 전에 자동으로 줄여 빠르게 처리합니다.</div>
+    <div id="photos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:14px"></div>
+  </div>
+
+  <div id="alerts"></div>
+  <div id="buildings"></div>
+  <div class="muted" id="empty" style="display:none">아직 보고서가 없습니다. 오른쪽 위 “＋ 예시 데이터 채우기”를 눌러보세요.</div>
+</div>
+
+<div class="panel" id="panel" onclick="if(event.target.id==='panel')close_()">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<script>
+const COLOR={A:'#388e3c',B:'#9ccc65',C:'#fbc02d',D:'#f57c00',E:'#d32f2f',HOLD:'#757575'};
+const LABEL={A:'A 안전',B:'B 경과관찰',C:'C 관찰',D:'D 정밀점검',E:'E 즉시조치',HOLD:'보류'};
+let CACHE={}, LBL={};
+const key=(rid,zid)=>rid+'||'+zid;
+
+async function load(){
+  const [reports,alerts,summary,labels,photos]=await Promise.all([
+    fetch('/api/reports').then(r=>r.json()),
+    fetch('/api/alerts').then(r=>r.json()),
+    fetch('/api/training-summary').then(r=>r.json()),
+    fetch('/api/labels').then(r=>r.json()),
+    fetch('/api/photos').then(r=>r.json())
+  ]);
+  LBL={}; labels.forEach(l=>LBL[key(l.report_id,l.zone_id)]=l);
+  renderTrain(summary);
+  renderPhotos(photos);
+  renderAlerts(alerts);
+  await renderBuildings(reports);
+}
+
+function renderPhotos(list){
+  const host=document.getElementById('photos');
+  host.innerHTML = list.length ? list.map(p=>{
+    const g=p.human_grade;
+    const badge = g ? `<span class="badge" style="background:${COLOR[g]}">${LABEL[g]}</span>`
+                    : `<span class="badge" style="background:#5a6675;color:#fff">미판정</span>`;
+    const qual = p.photo_quality==='low'
+      ? `<div style="color:#f0a020;font-size:12px;margin-top:4px">⚠ 사진 대비가 낮아 판단이 어려울 수 있어요</div>` : '';
+    const opts=['A','B','C','D','E','HOLD'].map(x=>`<option value="${x}" ${x===g?'selected':''}>${LABEL[x]}</option>`).join('');
+    return `<div class="card" style="padding:0;overflow:hidden">
+      <img src="${p.image_url}" style="width:100%;display:block;max-height:200px;object-fit:cover">
+      <div style="padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:8px">${badge}<span style="font-weight:600">${p.building||'현장 사진'}</span></div>
+        <div class="muted" style="margin-top:6px;font-size:12px">의심 지점 <b>${p.num_candidates}개</b> 표시됨 (빨간 박스) · 확인 후 등급 지정</div>
+        ${qual}
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+          <select id="pg_${p.id}" style="flex:1">${opts}</select>
+          <button class="primary" onclick="gradePhoto('${p.id}')">등급 저장</button>
+        </div>
+      </div></div>`;
+  }).join('') : '<div class="muted">아직 분석한 사진이 없습니다. 위에서 사진을 올려보세요.</div>';
+}
+
+async function gradePhoto(id){
+  const grade=document.getElementById('pg_'+id).value;
+  await fetch('/api/photo-grade',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id,grade})});
+  await load();
+}
+
+// 업로드 전에 브라우저에서 사진을 줄인다(폰·클라우드에서도 빠르게). avif도 jpeg로 변환됨.
+function resizeToDataURL(file, maxDim){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const s=Math.min(1, maxDim/Math.max(img.width,img.height));
+      const cw=Math.max(1,Math.round(img.width*s)), ch=Math.max(1,Math.round(img.height*s));
+      const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+      c.getContext('2d').drawImage(img,0,0,cw,ch);
+      resolve(c.toDataURL('image/jpeg',0.85));
+    };
+    img.onerror=reject;
+    const fr=new FileReader(); fr.onload=()=>img.src=fr.result; fr.onerror=reject; fr.readAsDataURL(file);
+  });
+}
+
+async function analyzePhoto(){
+  const files=[...document.getElementById('phFile').files];
+  const st=document.getElementById('phStatus'), btn=document.getElementById('phBtn');
+  if(!files.length){ st.textContent='사진을 먼저 선택하세요'; return; }
+  btn.disabled=true;
+  const bname=document.getElementById('phBuilding').value.trim();
+  let done=0, fail=0;
+  for(let i=0;i<files.length;i++){
+    const f=files[i];
+    st.textContent=`분석 중… ${i+1}/${files.length}`;
+    try{
+      const dataURL=await resizeToDataURL(f, 1600);
+      const rec=await fetch('/api/analyze-photo',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({building:bname||f.name, filename:f.name, image_b64:dataURL})}).then(r=>r.json());
+      if(rec.error) fail++; else done++;
+    }catch(e){ fail++; }
+  }
+  st.textContent=`완료: ${done}장 분석${fail?`, ${fail}장 실패`:''}. 아래에서 빨간 박스를 확인하고 등급을 지정하세요.`;
+  document.getElementById('phFile').value='';
+  btn.disabled=false;
+  await load();
+}
+
+function renderTrain(s){
+  const dist=Object.entries(s.distribution||{}).map(([g,n])=>
+    `<span style="color:${COLOR[g]};font-weight:700">${g}</span> ${n}`).join('  ·  ') || '아직 없음';
+  document.getElementById('train').innerHTML=`
+    <div class="panel-box train">
+      <div><div class="lbl">학습 데이터(사람이 매긴 정답)</div><div class="big">${s.labeled} 건</div></div>
+      <div><div class="lbl">모델 일치율</div><div class="big">${s.agreement_rate}%</div></div>
+      <div style="flex:1"><div class="lbl">등급 분포</div><div style="font-size:13px;margin-top:4px">${dist}</div></div>
+    </div>`;
+}
+
+function renderAlerts(a){
+  const el=document.getElementById('alerts');
+  if(!a.length){el.innerHTML='';return;}
+  el.innerHTML=`<div class="panel-box alerts"><h2>⚠️ 경보 — 고위험(D·E) ${a.length}건</h2>`+
+    a.map(x=>`<div class="alert-row"><b>${x.building_id} · ${x.zone_id}</b>
+      <span style="color:${COLOR[x.grade]};font-weight:700"> [${x.grade}]</span> ${x.action}</div>`).join('')+`</div>`;
+}
+
+async function renderBuildings(reports){
+  const host=document.getElementById('buildings');
+  document.getElementById('empty').style.display=reports.length?'none':'block';
+  host.innerHTML='';
+  for(const s of reports){
+    const r=await fetch('/api/reports/'+encodeURIComponent(s.report_id)).then(x=>x.json());
+    CACHE[r.report_id]=r;
+    const tiles=r.zones.map(z=>{
+      const lab=LBL[key(r.report_id,z.zone_id)];
+      const mark=lab?`<span class="tag">✓ ${lab.human_grade}</span>`:'';
+      return `<div class="zone" style="background:${COLOR[z.grade]}" onclick="detail('${r.report_id.replace(/'/g,"\\'")}','${z.zone_id.replace(/'/g,"\\'")}')">
+        ${mark}<div class="zid">${z.zone_id}</div><div class="zg">${z.grade}</div>
+        <div class="zs">점수 ${z.score} · 신뢰 ${z.confidence}</div></div>`;
+    }).join('');
+    host.insertAdjacentHTML('beforeend',`
+      <div class="card"><div class="card-head">
+        <span class="bid">${r.building_id}</span>
+        <span class="badge" style="background:${COLOR[r.overall_grade]}">${LABEL[r.overall_grade]}</span>
+        <span class="muted">${r.captured_at} · 드론 ${r.drone.id}</span>
+      </div><div class="grid">${tiles}</div></div>`);
+  }
+}
+
+function detail(rid,zid){
+  const r=CACHE[rid], z=r.zones.find(x=>x.zone_id===zid);
+  const t=z.indicators.thermal,u=z.indicators.ultrasonic,c=z.contributions;
+  const lab=LBL[key(rid,zid)];
+  const cur=lab?lab.human_grade:z.grade;
+  const opts=['A','B','C','D','E','HOLD'].map(g=>`<option value="${g}" ${g===cur?'selected':''}>${LABEL[g]}</option>`).join('');
+  document.getElementById('sheet').innerHTML=`
+    <span class="x" onclick="close_()">✕</span>
+    <h3>${z.zone_id} <span style="color:${COLOR[z.grade]}">[${z.grade}]</span></h3>
+    <div class="muted">${r.building_id} · ${z.geo.facade}면 · 고도 ${z.geo.alt_m}m</div>
+    <div style="margin-top:12px">
+      <div class="row"><span>위험 점수</span><span>${z.score}</span></div>
+      <div class="row"><span>신뢰도</span><span>${z.confidence}</span></div>
+      <div class="row"><span>열화상 ΔT_max</span><span>${t.dt_max_c} °C</span></div>
+      <div class="row"><span>이상 면적</span><span>${t.anomaly_area_m2} ㎡</span></div>
+      <div class="row"><span>패턴</span><span>${t.pattern} ${t.valid?'':'(열무효)'}</span></div>
+      <div class="row"><span>부풀음(초음파)</span><span>${u.bulge_max_mm} mm</span></div>
+      <div class="row"><span>기여도 S_t / S_u</span><span>${c.thermal} / ${c.ultra}</span></div>
+      <div class="row"><span>동시성 agree</span><span>${c.agree}</span></div>
+      <div class="row"><span>심각도 가중</span><span>×${c.context_factor}</span></div>
+    </div>
+    <div class="action" style="background:${COLOR[z.grade]}22;border:1px solid ${COLOR[z.grade]};color:${COLOR[z.grade]}">권고: ${z.action}</div>
+    <div class="learn">
+      <h4>📚 정답 등급 지정 (학습용)</h4>
+      <div class="muted" style="margin-bottom:8px">모델 판정: <b style="color:${COLOR[z.grade]}">${z.grade}</b> ${lab?` · 현재 라벨: <b>${lab.human_grade}</b>`:''}<br>
+        현장 점검 결과 맞는 등급을 골라 저장하면 학습 데이터로 쌓입니다.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="lblGrade">${opts}</select>
+        <input type="text" id="lblNote" placeholder="메모(선택)" style="flex:1;min-width:140px">
+        <button class="primary" onclick="saveLabel('${rid.replace(/'/g,"\\'")}','${zid.replace(/'/g,"\\'")}')">정답 저장</button>
+      </div>
+    </div>`;
+  document.getElementById('panel').classList.add('open');
+}
+
+async function saveLabel(rid,zid){
+  const grade=document.getElementById('lblGrade').value;
+  const note=document.getElementById('lblNote').value;
+  const res=await fetch('/api/labels',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({report_id:rid,zone_id:zid,grade,note})}).then(r=>r.json());
+  close_();
+  await load();
+}
+
+async function seed(){
+  await fetch('/api/seed',{method:'POST'});
+  await load();
+}
+
+function close_(){document.getElementById('panel').classList.remove('open');}
+load();
+</script>
+</body>
+</html>

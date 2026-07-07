@@ -1,0 +1,11 @@
+# Render(클라우드 호스팅) 배포 설정 — "New + → Blueprint"에서 이 저장소를 고르면 자동 적용.
+services:
+  - type: web
+    name: drone-risk-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.10"
