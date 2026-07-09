@@ -61,7 +61,6 @@
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
     <div style="display:flex;gap:8px">
       <button onclick="location.href='/monitor'">🎥 상시 감시</button>
-      <button onclick="seed()">＋ 예시 데이터 채우기</button>
       <button onclick="load()">새로고침</button>
     </div>
     <div class="legend">
@@ -99,8 +98,9 @@
   </div>
 
   <div id="alerts"></div>
+  <div style="font-weight:600;margin:4px 0 10px">🏢 현장별 위험 요약</div>
   <div id="buildings"></div>
-  <div class="muted" id="empty" style="display:none">아직 보고서가 없습니다. 오른쪽 위 “＋ 예시 데이터 채우기”를 눌러보세요.</div>
+  <div class="muted" id="empty" style="display:none">아직 분석 결과가 없습니다. 위에서 사진·영상을 올리면 현장 이름별로 여기에 요약됩니다.</div>
 </div>
 
 <div class="panel" id="panel" onclick="if(event.target.id==='panel')close_()">
@@ -114,18 +114,27 @@ let CACHE={}, LBL={};
 const key=(rid,zid)=>rid+'||'+zid;
 
 async function load(){
-  const [reports,alerts,summary,labels,photos]=await Promise.all([
-    fetch('/api/reports').then(r=>r.json()),
+  const [sites,alerts,summary,photos]=await Promise.all([
+    fetch('/api/sites').then(r=>r.json()),
     fetch('/api/alerts').then(r=>r.json()),
     fetch('/api/training-summary').then(r=>r.json()),
-    fetch('/api/labels').then(r=>r.json()),
     fetch('/api/photos').then(r=>r.json())
   ]);
-  LBL={}; labels.forEach(l=>LBL[key(l.report_id,l.zone_id)]=l);
   renderTrain(summary);
   renderPhotos(photos);
   renderAlerts(alerts);
-  await renderBuildings(reports);
+  renderSites(sites);
+}
+
+function renderSites(sites){
+  const host=document.getElementById('buildings');
+  document.getElementById('empty').style.display = sites.length?'none':'block';
+  host.innerHTML = sites.map(s=>`
+    <div class="card"><div class="card-head">
+      <span class="bid">${s.site}</span>
+      <span class="badge" style="background:${COLOR[s.overall]||'#5a6675'}">${s.overall?LABEL[s.overall]:'미판정'}</span>
+      <span class="muted">사진 ${s.photo_count}장 · 사람 확정 ${s.confirmed}장</span>
+    </div></div>`).join('');
 }
 
 function renderPhotos(list){

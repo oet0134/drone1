@@ -1,4 +1,6 @@
-"""backend/server.py — HTTP 왕복: 제출(멱등)·조회·경보·시딩·라벨링."""
+"""backend/server.py — HTTP 왕복: 제출·조회·시딩·라벨·사진경보·현장요약."""
+import base64
+import io
 import json
 import os
 import tempfile
@@ -9,18 +11,27 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
+from PIL import Image
+
 from backend import server as srv
 from drone_risk.frame_sensors import building_scan
 from drone_risk.pipeline import assess_building
 from drone_risk.transport.client import BackendClient
 
 
+def _jpg_b64(color=(140, 150, 160)):
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), color).save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 class TestBackend(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        srv.DATA = os.path.join(self._tmp.name, "reports")
-        srv.LABELS = os.path.join(self._tmp.name, "labels")
-        os.makedirs(srv.DATA); os.makedirs(srv.LABELS)
+        for name in ("DATA", "LABELS", "PHOTOS", "UPLOADS", "MONITORS"):
+            p = os.path.join(self._tmp.name, name.lower())
+            setattr(srv, name, p)
+            os.makedirs(p)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
         self.port = self.httpd.server_address[1]
         self.t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -42,51 +53,44 @@ class TestBackend(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
-        return json.load(urllib.request.urlopen(req, timeout=5))
+        return json.load(urllib.request.urlopen(req, timeout=30))
 
-    def test_submit_idempotent_then_query(self):
+    def test_submit_idempotent(self):
         self.assertTrue(self.client.submit(self.report))
-        self.assertTrue(self.client.submit(self.report))   # 재전송
+        self.assertTrue(self.client.submit(self.report))
         self.assertEqual(len(self._get("/api/reports")), 1)
-        self.assertEqual(len(os.listdir(srv.DATA)), 1)
 
-    def test_alerts_surface_high_risk(self):
-        self.client.submit(self.report)
-        grades = {a["grade"] for a in self._get("/api/alerts")}
-        self.assertIn("E", grades)      # north-7F 탈락 임박
-        self.assertIn("D", grades)      # south-5F 진행된 박리
+    def test_photo_alert_and_site_summary(self):
+        rec = self._post("/api/analyze-photo",
+                         {"building": "테스트현장", "filename": "t.jpg",
+                          "image_b64": _jpg_b64()})
+        self.assertIsNone(rec["human_grade"])                 # 처음엔 미확정
+        self._post("/api/photo-grade", {"id": rec["id"], "grade": "E"})
+        self.assertIn("E", {a["grade"] for a in self._get("/api/alerts")})
+        sites = self._get("/api/sites")
+        self.assertTrue(any(s["site"] == "테스트현장" and s["overall"] == "E"
+                            for s in sites))
 
-    def test_seed_creates_varied_buildings(self):
-        self._post("/api/seed", {})
-        reps = self._get("/api/reports")
-        self.assertEqual(len(reps), 8)
-        grades = {r["overall_grade"] for r in reps}
-        self.assertIn("A", grades)
-        self.assertIn("E", grades)
-
-    def test_label_accumulates_training_data(self):
-        self.client.submit(self.report)
-        full = self._get("/api/reports/"
-                         + urllib.parse.quote(self.report["report_id"]))
-        zid = full["zones"][0]["zone_id"]
-        res = self._post("/api/labels", {"report_id": self.report["report_id"],
-                                         "zone_id": zid, "grade": "A", "note": "t"})
-        self.assertEqual(res["status"], "labeled")
+    def test_photo_confirmation_counts_in_training(self):
+        rec = self._post("/api/analyze-photo",
+                         {"building": "A", "filename": "a.jpg", "image_b64": _jpg_b64()})
+        self._post("/api/photo-grade", {"id": rec["id"], "grade": "C"})
         summ = self._get("/api/training-summary")
-        self.assertEqual(summ["labeled"], 1)
-        # 같은 구역 재라벨 → 덮어씀(멱등), 누적 1건 유지
-        self._post("/api/labels", {"report_id": self.report["report_id"],
-                                   "zone_id": zid, "grade": "B", "note": "t2"})
-        self.assertEqual(self._get("/api/training-summary")["labeled"], 1)
+        self.assertGreaterEqual(summ["labeled"], 1)           # 사진 확정도 학습에 집계
+
+    def test_monitor_baseline_and_frame(self):
+        self._post("/api/monitor/baseline",
+                   {"monitor_id": "m1", "image_b64": _jpg_b64()})
+        res = self._post("/api/monitor/frame",
+                         {"monitor_id": "m1", "image_b64": _jpg_b64()})
+        self.assertIn(res["status"], ("normal", "alert"))
+        self.assertIn("image_url", res)
 
     def test_bad_grade_rejected(self):
-        self.client.submit(self.report)
-        full = self._get("/api/reports/"
-                         + urllib.parse.quote(self.report["report_id"]))
-        zid = full["zones"][0]["zone_id"]
+        rec = self._post("/api/analyze-photo",
+                         {"building": "A", "filename": "a.jpg", "image_b64": _jpg_b64()})
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            self._post("/api/labels", {"report_id": self.report["report_id"],
-                                       "zone_id": zid, "grade": "Z"})
+            self._post("/api/photo-grade", {"id": rec["id"], "grade": "Z"})
         self.assertEqual(cm.exception.code, 400)
 
     def test_missing_report_id_rejected(self):

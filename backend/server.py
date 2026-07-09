@@ -50,6 +50,7 @@ from drone_risk.sample_data import sample_buildings
 from drone_risk.pipeline import assess_building
 from drone_risk.rgb_analysis import analyze_photo, baseline_from, monitor_frame
 from drone_risk.report import GRADE_ACTION
+from drone_risk.risk_engine import worst_grade
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data", "reports")
@@ -169,23 +170,51 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         if path == "/api/alerts":
             alerts = []
-            for r in _all_reports():
-                for z in r["zones"]:
-                    if z["grade"] in ALERT_GRADES:
-                        alerts.append({"building_id": r["building_id"],
-                                       "zone_id": z["zone_id"], "grade": z["grade"],
-                                       "action": z["action"]})
+            for p in _all_photos():             # 사진: 확정(없으면 AI제안) D/E
+                g = p.get("human_grade") or p.get("ai_grade")
+                if g in ALERT_GRADES:
+                    alerts.append({"building_id": p.get("building") or "현장",
+                                   "zone_id": p.get("filename") or "사진", "grade": g,
+                                   "action": GRADE_ACTION.get(g, "")})
+            for x in sorted(os.listdir(MONITORS)):   # 상시감시: 경보 상태
+                if x.endswith(".json"):
+                    with open(os.path.join(MONITORS, x), encoding="utf-8") as f:
+                        m = json.load(f)
+                    if m.get("status") == "alert":
+                        alerts.append({"building_id": m["id"], "zone_id": "상시감시",
+                                       "grade": "E",
+                                       "action": f"기준 대비 새 이상 {m.get('last_new', 0)}개 감지"})
             return self._send(200, alerts)
+        if path == "/api/sites":                # 현장별(사진 building 기준) 위험 요약
+            groups = {}
+            for p in _all_photos():
+                name = p.get("building") or "(이름없음)"
+                groups.setdefault(name, []).append(p)
+            out = []
+            for name, items in groups.items():
+                grades = [(p.get("human_grade") or p.get("ai_grade")) for p in items]
+                grades = [g for g in grades if g]
+                overall = worst_grade(grades) if grades else None
+                out.append({"site": name, "overall": overall,
+                            "photo_count": len(items),
+                            "confirmed": sum(1 for p in items if p.get("human_grade"))})
+            rank = {"E": 5, "D": 4, "HOLD": 3.5, "C": 3, "B": 2, "A": 1, None: 0}
+            out.sort(key=lambda s: -rank.get(s["overall"], 0))
+            return self._send(200, out)
         if path == "/api/labels":
             return self._send(200, _all_labels())
         if path == "/api/training-summary":
-            recs = _all_labels()
-            agree = sum(1 for r in recs if r["model_grade"] == r["human_grade"])
+            # 사람이 확정한 것: (구역 라벨 - 레거시) + (사진 AI제안 vs 사람확정)
+            pairs = [(r["model_grade"], r["human_grade"]) for r in _all_labels()]
+            for p in _all_photos():
+                if p.get("human_grade"):
+                    pairs.append((p.get("ai_grade"), p["human_grade"]))
+            agree = sum(1 for a, h in pairs if a == h)
             dist = {}
-            for r in recs:
-                dist[r["human_grade"]] = dist.get(r["human_grade"], 0) + 1
-            rate = round(agree / len(recs) * 100) if recs else 0
-            return self._send(200, {"labeled": len(recs), "agree": agree,
+            for _, h in pairs:
+                dist[h] = dist.get(h, 0) + 1
+            rate = round(agree / len(pairs) * 100) if pairs else 0
+            return self._send(200, {"labeled": len(pairs), "agree": agree,
                                     "agreement_rate": rate, "distribution": dist})
         if path in ("/monitor", "/monitor.html"):
             try:
@@ -378,13 +407,6 @@ def main():
     on_cloud = "PORT" in os.environ
     port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else 8765))
     host = sys.argv[2] if len(sys.argv) > 2 else ("0.0.0.0" if on_cloud else "127.0.0.1")
-
-    # 보고서 데이터가 비어 있으면(클라우드 첫 실행 등) 예시 건물 자동 생성
-    if not any(x.endswith(".json") for x in os.listdir(DATA)):
-        builds = sample_buildings()
-        for scan in builds:
-            _store(assess_building(scan))
-        print(f"  예시 건물 {len(builds)}개 자동 생성")
 
     srv = ThreadingHTTPServer((host, port), Handler)   # 이 시점에 포트가 열려 접속 가능
     print(f"backend listening on {host}:{port}  (dashboard at /)")
