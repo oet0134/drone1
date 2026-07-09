@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>현장 상시 감시 — 드론 외벽 위험도</title>
+<style>
+  :root{--bg:#0f1419;--card:#1b232d;--line:#2c3744;--txt:#e6edf3;--dim:#9aa7b4;--accent:#3d8bfd;
+        --ok:#388e3c;--alert:#d32f2f;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--txt)}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  h1{font-size:17px;margin:0}
+  .muted{color:var(--dim);font-size:13px}
+  .wrap{padding:16px 20px;max-width:900px;margin:0 auto;display:grid;grid-template-columns:1fr;gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  video,#shot{width:100%;border-radius:10px;display:block;background:#000;max-height:50vh;object-fit:contain}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  input,select{background:#0f1722;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+  button{background:#243042;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:9px 14px;cursor:pointer;font-size:14px}
+  button:hover{background:#2e3d52}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .status{font-size:26px;font-weight:800;padding:14px;border-radius:10px;text-align:center}
+  .status.ok{background:#123020;color:#7fdca0;border:1px solid var(--ok)}
+  .status.alert{background:#3a1416;color:#ff8a80;border:1px solid var(--alert)}
+  .status.idle{background:#22303f;color:var(--dim);border:1px solid var(--line)}
+  .log{font-size:13px;max-height:160px;overflow:auto}
+  .log div{padding:4px 0;border-bottom:1px solid var(--line)}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🎥 현장 상시 감시 (CCTV형)</h1>
+    <div class="muted">정상 화면을 기준으로 저장 → 새로 생긴 이상만 자동 경보 · 창틀·줄눈은 무시</div>
+  </div>
+  <a href="/">← 대시보드로</a>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <div id="statusBox" class="status idle">카메라를 켜고 “정상 기준 설정”을 눌러 시작하세요</div>
+    <div class="muted" id="detail" style="margin-top:8px;text-align:center">—</div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:6px">실시간 카메라</div>
+    <video id="cam" autoplay playsinline muted></video>
+    <div class="row">
+      <input id="mid" value="cam1" placeholder="감시지점 이름" style="width:140px">
+      <label class="muted">점검 간격
+        <select id="interval"><option value="3">3초</option><option value="5" selected>5초</option><option value="10">10초</option><option value="30">30초</option></select>
+      </label>
+      <button id="btnCam" onclick="startCam()">카메라 켜기</button>
+      <button id="btnBase" class="primary" onclick="setBaseline()" disabled>정상 기준 설정</button>
+      <button id="btnRun" onclick="toggleRun()" disabled>감시 시작</button>
+      <label class="muted"><input type="checkbox" id="beep" checked> 경보음</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:6px">분석 화면 (빨강=새로 생긴 이상, 회색=원래 있던 것)</div>
+    <img id="shot" alt="분석 화면이 여기에 표시됩니다">
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:6px">경보 기록</div>
+    <div class="log" id="log"><div class="muted">아직 경보 없음</div></div>
+  </div>
+</div>
+
+<canvas id="cv" style="display:none"></canvas>
+<script>
+let stream=null, running=false, timer=null, hasBaseline=false, shotN=0;
+const $=id=>document.getElementById(id);
+
+async function startCam(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    $('cam').srcObject=stream;
+    $('btnBase').disabled=false; $('btnCam').textContent='카메라 켜짐';
+  }catch(e){ setStatus('idle','카메라를 열 수 없어요: '+e.message); }
+}
+
+function grab(maxDim){
+  const v=$('cam'); const cv=$('cv');
+  const s=Math.min(1, maxDim/Math.max(v.videoWidth||1,v.videoHeight||1));
+  cv.width=Math.max(1,Math.round((v.videoWidth||640)*s));
+  cv.height=Math.max(1,Math.round((v.videoHeight||480)*s));
+  cv.getContext('2d').drawImage(v,0,0,cv.width,cv.height);
+  return cv.toDataURL('image/jpeg',0.85);
+}
+
+async function setBaseline(){
+  if(!stream){ return; }
+  const r=await fetch('/api/monitor/baseline',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({monitor_id:$('mid').value||'cam1', image_b64:grab(1000)})}).then(r=>r.json());
+  hasBaseline=true; $('btnRun').disabled=false;
+  setStatus('ok','정상 기준 저장됨 (기준 특징 '+ (r.baseline_count??0) +'개). ‘감시 시작’을 누르세요');
+  $('detail').textContent='이제 기준과 달라진 부분만 감지합니다';
+}
+
+function toggleRun(){
+  running=!running;
+  $('btnRun').textContent=running?'감시 정지':'감시 시작';
+  if(running){ tick(); schedule(); } else if(timer){ clearTimeout(timer); }
+}
+function schedule(){
+  if(timer) clearTimeout(timer);
+  if(running) timer=setTimeout(async()=>{ await tick(); schedule(); }, (+$('interval').value)*1000);
+}
+
+async function tick(){
+  if(!running||!hasBaseline||!stream) return;
+  try{
+    const r=await fetch('/api/monitor/frame',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({monitor_id:$('mid').value||'cam1', image_b64:grab(1000)})}).then(r=>r.json());
+    if(r.error){ setStatus('idle','오류: '+r.error); return; }
+    $('shot').src=r.image_url+'?t='+(shotN++);
+    const q = r.photo_quality==='low' ? ' · ⚠사진 대비 낮음' : '';
+    if(r.status==='alert'){
+      setStatus('alert','⚠ 이상 감지! 새로 생긴 의심 지점 '+r.new_count+'개');
+      $('detail').textContent='기준 대비 변화 발생'+q;
+      addLog(r.new_count); if($('beep').checked) beep();
+    }else{
+      setStatus('ok','정상 · 기준 대비 변화 없음');
+      $('detail').textContent='감시 중… (의심 지점 총 '+r.total+'개, 모두 기존)'+q;
+    }
+  }catch(e){ setStatus('idle','통신 오류: '+e.message); }
+}
+
+function setStatus(kind,msg){ const b=$('statusBox'); b.className='status '+kind; b.textContent=msg; }
+function addLog(n){
+  const l=$('log'); if(l.querySelector('.muted')) l.innerHTML='';
+  const t=new Date? '' : ''; // 시간은 서버 기록에도 있음
+  l.insertAdjacentHTML('afterbegin','<div>⚠ 이상 감지 · 새 의심 '+n+'개</div>');
+}
+function beep(){
+  try{ const a=new (window.AudioContext||window.webkitAudioContext)();
+    const o=a.createOscillator(),g=a.createGain(); o.connect(g); g.connect(a.destination);
+    o.frequency.value=880; o.start(); g.gain.setValueAtTime(0.2,a.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+0.4); o.stop(a.currentTime+0.4);
+  }catch(e){}
+}
+</script>
+</body>
+</html>

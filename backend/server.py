@@ -18,6 +18,12 @@
   GET  /api/photos           사진 분석 결과 목록
   GET  /uploads/{file}       의심 지점에 빨간 박스 그린 주석 이미지(JPG)
 
+상시 감시(CCTV형 — 기준 대비 변화 감지):
+  POST /api/monitor/baseline 현재 화면을 '정상 기준'으로 등록
+  POST /api/monitor/frame    감시 한 컷 → 기준 대비 새 이상 → 정상/경보
+  GET  /api/monitors         감시 지점별 상태·경보 목록
+  GET  /monitor              감시 화면(카메라 실시간)
+
   GET  /  (또는 /dashboard)  웹 대시보드(HTML)
 
 실행:  python backend/server.py [port]
@@ -29,6 +35,7 @@ import json
 import os
 import socket
 import sys
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
@@ -41,7 +48,7 @@ if _ROOT not in sys.path:
 
 from drone_risk.sample_data import sample_buildings
 from drone_risk.pipeline import assess_building
-from drone_risk.rgb_analysis import analyze_photo
+from drone_risk.rgb_analysis import analyze_photo, baseline_from, monitor_frame
 from drone_risk.report import GRADE_ACTION
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,8 +56,10 @@ DATA = os.path.join(HERE, "data", "reports")
 LABELS = os.path.join(HERE, "data", "labels")
 PHOTOS = os.path.join(HERE, "data", "photos")      # 사진 분석 결과(JSON)
 UPLOADS = os.path.join(HERE, "data", "uploads")    # 주석 이미지(JPG)
+MONITORS = os.path.join(HERE, "data", "monitors")  # 상시 감시 기준·상태(JSON)
 DASHBOARD = os.path.join(HERE, "dashboard.html")
-for _d in (DATA, LABELS, PHOTOS, UPLOADS):
+MONITOR_PAGE = os.path.join(HERE, "monitor.html")
+for _d in (DATA, LABELS, PHOTOS, UPLOADS, MONITORS):
     os.makedirs(_d, exist_ok=True)
 
 ALERT_GRADES = {"E", "D"}      # 최위험 두 등급 (국가 표준 방향)
@@ -178,6 +187,22 @@ class Handler(BaseHTTPRequestHandler):
             rate = round(agree / len(recs) * 100) if recs else 0
             return self._send(200, {"labeled": len(recs), "agree": agree,
                                     "agreement_rate": rate, "distribution": dist})
+        if path in ("/monitor", "/monitor.html"):
+            try:
+                with open(MONITOR_PAGE, encoding="utf-8") as f:
+                    return self._send(200, f.read(), "text/html")
+            except FileNotFoundError:
+                return self._send(404, {"error": "monitor page not found"})
+        if path == "/api/monitors":
+            out = []
+            for x in sorted(os.listdir(MONITORS)):
+                if x.endswith(".json"):
+                    with open(os.path.join(MONITORS, x), encoding="utf-8") as f:
+                        m = json.load(f)
+                    out.append({k: m.get(k) for k in
+                                ("id", "status", "last_new", "image_url",
+                                 "updated", "alerts")})
+            return self._send(200, out)
         if path == "/api/photos":
             return self._send(200, _all_photos())
         if path.startswith("/uploads/"):
@@ -280,6 +305,56 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(201, {"status": "labeled",
                                     "model_grade": zone["grade"],
                                     "human_grade": grade})
+
+        if path == "/api/monitor/baseline":     # '정상 상태' 기준 등록
+            mid = _safe(body.get("monitor_id", "cam1") or "cam1")
+            b64 = body.get("image_b64", "")
+            if "," in b64:
+                b64 = b64.split(",", 1)[1]
+            try:
+                base = baseline_from(base64.b64decode(b64))
+            except Exception as e:
+                return self._send(400, {"error": f"baseline failed: {e}"})
+            rec = {"id": mid, "centers": base["centers"],
+                   "baseline_count": base["count"], "quality": base["quality"],
+                   "status": "normal", "last_new": 0, "alerts": [],
+                   "image_url": None, "updated": time.strftime("%H:%M:%S")}
+            with open(os.path.join(MONITORS, mid + ".json"), "w", encoding="utf-8") as f:
+                json.dump(rec, f, ensure_ascii=False)
+            return self._send(201, {"status": "baseline_set", "id": mid,
+                                    "baseline_count": base["count"]})
+
+        if path == "/api/monitor/frame":        # 감시 한 컷 → 기준 대비 새 이상
+            mid = _safe(body.get("monitor_id", "cam1") or "cam1")
+            fp = os.path.join(MONITORS, mid + ".json")
+            if not os.path.isfile(fp):
+                return self._send(409, {"error": "no baseline; set baseline first"})
+            b64 = body.get("image_b64", "")
+            if "," in b64:
+                b64 = b64.split(",", 1)[1]
+            with open(fp, encoding="utf-8") as f:
+                rec = json.load(f)
+            try:
+                res = monitor_frame(base64.b64decode(b64), rec["centers"])
+            except Exception as e:
+                return self._send(400, {"error": f"frame failed: {e}"})
+            with open(os.path.join(UPLOADS, "mon_" + mid + ".jpg"), "wb") as f:
+                f.write(res["annotated_jpg"])
+            rec["status"] = res["status"]
+            rec["last_new"] = res["new_count"]
+            rec["updated"] = time.strftime("%H:%M:%S")
+            rec["image_url"] = f"/uploads/mon_{mid}.jpg"
+            if res["status"] == "alert":
+                rec.setdefault("alerts", []).insert(
+                    0, {"time": rec["updated"], "new": res["new_count"]})
+                rec["alerts"] = rec["alerts"][:20]
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(rec, f, ensure_ascii=False)
+            return self._send(200, {"status": res["status"],
+                                    "new_count": res["new_count"],
+                                    "total": res["total"],
+                                    "photo_quality": res["photo_quality"],
+                                    "image_url": rec["image_url"]})
 
         return self._send(404, {"error": "unknown route"})
 
