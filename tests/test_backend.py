@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from backend import server as srv
 from drone_risk.frame_sensors import building_scan
@@ -22,6 +22,14 @@ from drone_risk.transport.client import BackendClient
 def _jpg_b64(color=(140, 150, 160)):
     buf = io.BytesIO()
     Image.new("RGB", (400, 300), color).save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _mark_b64():
+    """밝은 배경에 진한 사각형(=새로 생긴 표시) 하나."""
+    img = Image.new("RGB", (400, 300), (205, 205, 205))
+    ImageDraw.Draw(img).rectangle([120, 100, 230, 190], fill=(20, 20, 20))
+    buf = io.BytesIO(); img.save(buf, format="JPEG")
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -78,13 +86,21 @@ class TestBackend(unittest.TestCase):
         summ = self._get("/api/training-summary")
         self.assertGreaterEqual(summ["labeled"], 1)           # 사진 확정도 학습에 집계
 
-    def test_monitor_baseline_and_frame(self):
+    def test_monitor_unchanged_is_normal(self):
         self._post("/api/monitor/baseline",
-                   {"monitor_id": "m1", "image_b64": _jpg_b64()})
+                   {"monitor_id": "m1", "image_b64": _jpg_b64((205, 205, 205))})
         res = self._post("/api/monitor/frame",
-                         {"monitor_id": "m1", "image_b64": _jpg_b64()})
-        self.assertIn(res["status"], ("normal", "alert"))
+                         {"monitor_id": "m1", "image_b64": _jpg_b64((205, 205, 205))})
+        self.assertEqual(res["status"], "normal")
         self.assertIn("image_url", res)
+
+    def test_monitor_debounce_then_alert(self):
+        self._post("/api/monitor/baseline",
+                   {"monitor_id": "m2", "image_b64": _jpg_b64((205, 205, 205))})
+        r1 = self._post("/api/monitor/frame", {"monitor_id": "m2", "image_b64": _mark_b64()})
+        self.assertEqual(r1["status"], "watching")     # 첫 감지 → 확인 중
+        r2 = self._post("/api/monitor/frame", {"monitor_id": "m2", "image_b64": _mark_b64()})
+        self.assertEqual(r2["status"], "alert")        # 연속 확인 → 경보
 
     def test_bad_grade_rejected(self):
         rec = self._post("/api/analyze-photo",

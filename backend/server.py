@@ -51,6 +51,7 @@ from drone_risk.pipeline import assess_building
 from drone_risk.rgb_analysis import analyze_photo, monitor_baseline, monitor_check
 from drone_risk.report import GRADE_ACTION
 from drone_risk.risk_engine import worst_grade
+from drone_risk.config import RGB
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data", "reports")
@@ -372,17 +373,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": f"frame failed: {e}"})
             with open(os.path.join(UPLOADS, "mon_" + mid + ".jpg"), "wb") as f:
                 f.write(res["annotated_jpg"])
-            rec["status"] = res["status"]
+            # 디바운스: 연속 confirm_frames번 감지돼야 경보(순간 그림자·흔들림 무시)
+            confirm = RGB["monitor"]["confirm_frames"]
+            pending = rec.get("pending", 0) + 1 if res["status"] == "alert" else 0
+            rec["pending"] = pending
+            if pending >= confirm:
+                eff = "alert"
+            elif res["status"] == "alert":
+                eff = "watching"                      # 감지됨 — 확인 중
+            else:
+                eff = res["status"]                   # normal / moved
+            rec["status"] = eff
             rec["last_new"] = res["new_count"]
             rec["updated"] = time.strftime("%H:%M:%S")
             rec["image_url"] = f"/uploads/mon_{mid}.jpg"
-            if res["status"] == "alert":
+            if eff == "alert" and pending == confirm:   # 처음 확정되는 순간만 기록
                 rec.setdefault("alerts", []).insert(
                     0, {"time": rec["updated"], "new": res["new_count"]})
                 rec["alerts"] = rec["alerts"][:20]
             with open(fp, "w", encoding="utf-8") as f:
                 json.dump(rec, f, ensure_ascii=False)
-            return self._send(200, {"status": res["status"],
+            return self._send(200, {"status": eff,
                                     "new_count": res["new_count"],
                                     "changed_ratio": res["changed_ratio"],
                                     "image_url": rec["image_url"]})

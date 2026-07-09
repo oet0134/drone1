@@ -124,6 +124,9 @@ async function tick(){
       setStatus('alert','⚠ 이상 감지! 새로 생긴 변화 '+r.new_count+'곳');
       $('detail').textContent='기준 대비 국부 변화 (전체 변화 '+pct+'%)';
       addLog(r.new_count); if($('beep').checked) beep();
+    }else if(r.status==='watching'){
+      setStatus('idle','👀 변화 감지 — 확인 중… (한 번 더 확인되면 경보)');
+      $('detail').textContent='순간 변화(그림자·흔들림)일 수 있어 재확인 중 (변화 '+pct+'%)';
     }else if(r.status==='moved'){
       setStatus('idle','🔄 화면이 크게 바뀌었어요 (카메라 이동/조명 변화?) — 카메라를 고정하세요. 필요하면 기준을 다시 설정하세요');
       $('detail').textContent='화면 변화 '+pct+'% → 전체 변화로 판단(경보 보류)';
