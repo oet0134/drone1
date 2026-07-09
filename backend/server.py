@@ -48,7 +48,7 @@ if _ROOT not in sys.path:
 
 from drone_risk.sample_data import sample_buildings
 from drone_risk.pipeline import assess_building
-from drone_risk.rgb_analysis import analyze_photo, baseline_from, monitor_frame
+from drone_risk.rgb_analysis import analyze_photo, monitor_baseline, monitor_check
 from drone_risk.report import GRADE_ACTION
 from drone_risk.risk_engine import worst_grade
 
@@ -335,36 +335,39 @@ class Handler(BaseHTTPRequestHandler):
                                     "model_grade": zone["grade"],
                                     "human_grade": grade})
 
-        if path == "/api/monitor/baseline":     # '정상 상태' 기준 등록
+        if path == "/api/monitor/baseline":     # '정상 상태' 기준 등록(기준 이미지 저장)
             mid = _safe(body.get("monitor_id", "cam1") or "cam1")
             b64 = body.get("image_b64", "")
             if "," in b64:
                 b64 = b64.split(",", 1)[1]
             try:
-                base = baseline_from(base64.b64decode(b64))
+                base = monitor_baseline(base64.b64decode(b64))
             except Exception as e:
                 return self._send(400, {"error": f"baseline failed: {e}"})
-            rec = {"id": mid, "centers": base["centers"],
-                   "baseline_count": base["count"], "quality": base["quality"],
-                   "status": "normal", "last_new": 0, "alerts": [],
-                   "image_url": None, "updated": time.strftime("%H:%M:%S")}
+            with open(os.path.join(MONITORS, "base_" + mid + ".png"), "wb") as f:
+                f.write(base["gray_png"])
+            rec = {"id": mid, "quality": base["quality"], "status": "normal",
+                   "last_new": 0, "alerts": [], "image_url": None,
+                   "updated": time.strftime("%H:%M:%S")}
             with open(os.path.join(MONITORS, mid + ".json"), "w", encoding="utf-8") as f:
                 json.dump(rec, f, ensure_ascii=False)
-            return self._send(201, {"status": "baseline_set", "id": mid,
-                                    "baseline_count": base["count"]})
+            return self._send(201, {"status": "baseline_set", "id": mid})
 
-        if path == "/api/monitor/frame":        # 감시 한 컷 → 기준 대비 새 이상
+        if path == "/api/monitor/frame":        # 감시 한 컷 → 기준 대비 변화 비교
             mid = _safe(body.get("monitor_id", "cam1") or "cam1")
             fp = os.path.join(MONITORS, mid + ".json")
-            if not os.path.isfile(fp):
+            base_fp = os.path.join(MONITORS, "base_" + mid + ".png")
+            if not (os.path.isfile(fp) and os.path.isfile(base_fp)):
                 return self._send(409, {"error": "no baseline; set baseline first"})
             b64 = body.get("image_b64", "")
             if "," in b64:
                 b64 = b64.split(",", 1)[1]
             with open(fp, encoding="utf-8") as f:
                 rec = json.load(f)
+            with open(base_fp, "rb") as f:
+                base_png = f.read()
             try:
-                res = monitor_frame(base64.b64decode(b64), rec["centers"])
+                res = monitor_check(base64.b64decode(b64), base_png)
             except Exception as e:
                 return self._send(400, {"error": f"frame failed: {e}"})
             with open(os.path.join(UPLOADS, "mon_" + mid + ".jpg"), "wb") as f:
@@ -381,8 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                 json.dump(rec, f, ensure_ascii=False)
             return self._send(200, {"status": res["status"],
                                     "new_count": res["new_count"],
-                                    "total": res["total"],
-                                    "photo_quality": res["photo_quality"],
+                                    "changed_ratio": res["changed_ratio"],
                                     "image_url": rec["image_url"]})
 
         return self._send(404, {"error": "unknown route"})

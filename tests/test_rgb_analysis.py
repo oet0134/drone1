@@ -3,7 +3,7 @@ import io
 import unittest
 import numpy as np
 from PIL import Image, ImageDraw
-from drone_risk.rgb_analysis import analyze_photo, baseline_from, monitor_frame
+from drone_risk.rgb_analysis import analyze_photo, monitor_baseline, monitor_check
 
 _rng = np.random.default_rng(0)
 _BASE = np.clip(150 + _rng.normal(0, 25, (700, 900)), 0, 255).astype("uint8")
@@ -50,27 +50,26 @@ class TestRgbAssist(unittest.TestCase):
 
 
 class TestMonitor(unittest.TestCase):
-    """상시 감시: 기준의 기존 이상은 무시, 새로 생긴 것만 경보."""
-    def _with_line(self, extra=None):
-        img = _wall()
-        d = ImageDraw.Draw(img)
-        d.line([(100, 150), (400, 450)], fill=(30, 30, 30), width=6)   # 기존 특징
-        if extra:
-            d.line(extra, fill=(28, 28, 28), width=6)                  # 새 균열
-        return img
-
-    def test_unchanged_frame_is_normal(self):
-        base = baseline_from(_jpg(self._with_line()))
-        self.assertGreaterEqual(base["count"], 1)
-        res = monitor_frame(_jpg(self._with_line()), base["centers"])
+    """상시 감시(변화 감지): 기준 대비 새로 어두워진 국부 변화만 경보, 전체 변화는 '이동'."""
+    def test_unchanged_is_normal(self):
+        base = monitor_baseline(_jpg(_wall()))
+        res = monitor_check(_jpg(_wall()), base["gray_png"])
         self.assertEqual(res["status"], "normal")
-        self.assertEqual(res["new_count"], 0)      # 기존 선은 기준에 있어 무시
+        self.assertEqual(res["new_count"], 0)
 
-    def test_new_defect_triggers_alert(self):
-        base = baseline_from(_jpg(self._with_line()))
-        res = monitor_frame(_jpg(self._with_line([(600, 150), (840, 470)])), base["centers"])
+    def test_new_mark_alerts(self):
+        base = monitor_baseline(_jpg(_wall()))
+        img = _wall()
+        ImageDraw.Draw(img).line([(200, 120), (300, 260)], fill=(20, 20, 20), width=10)
+        res = monitor_check(_jpg(img), base["gray_png"])    # 짧은 낙서도 잡힘
         self.assertEqual(res["status"], "alert")
-        self.assertGreaterEqual(res["new_count"], 1)   # 새 균열만 경보
+        self.assertGreaterEqual(res["new_count"], 1)
+
+    def test_global_change_is_moved(self):
+        base = monitor_baseline(_jpg(_wall()))
+        dark = np.clip(_BASE.astype(int) - 60, 0, 255).astype("uint8")   # 화면 전체 어두워짐
+        res = monitor_check(_jpg(Image.fromarray(dark).convert("RGB")), base["gray_png"])
+        self.assertEqual(res["status"], "moved")
 
 
 if __name__ == "__main__":
