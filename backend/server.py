@@ -15,6 +15,7 @@
 일반 사진 분석(RGB, Mavic 3 등 일반 카메라) — 사람 판단 보조:
   POST /api/analyze-photo    사진 업로드(base64) → 의심 지점(균열형) 표시 (등급 X)
   POST /api/photo-grade      사람이 사진에 등급 지정(= 최종 판단 + 학습 데이터)
+  POST /api/photo-delete     잘못 찍힌/불필요한 사진 삭제
   GET  /api/photos           사진 분석 결과 목록
   GET  /uploads/{file}       의심 지점에 빨간 박스 그린 주석 이미지(JPG)
 
@@ -314,6 +315,17 @@ class Handler(BaseHTTPRequestHandler):
                 json.dump(rec, f, ensure_ascii=False)
             return self._send(201, {"status": "graded", "id": pid,
                                     "human_grade": grade})
+
+        if path == "/api/photo-delete":    # 잘못 찍힌/불필요한 사진 삭제
+            pid = _safe(body.get("id", "") or "")
+            fp = os.path.join(PHOTOS, pid + ".json")
+            if not os.path.isfile(fp):
+                return self._send(404, {"error": "photo not found"})
+            os.remove(fp)
+            img = os.path.join(UPLOADS, pid + ".jpg")
+            if os.path.isfile(img):
+                os.remove(img)
+            return self._send(200, {"status": "deleted", "id": pid})
 
         if path == "/api/labels":
             rid = body.get("report_id"); zid = body.get("zone_id")

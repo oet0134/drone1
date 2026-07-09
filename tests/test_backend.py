@@ -86,6 +86,13 @@ class TestBackend(unittest.TestCase):
         summ = self._get("/api/training-summary")
         self.assertGreaterEqual(summ["labeled"], 1)           # 사진 확정도 학습에 집계
 
+    def test_photo_delete(self):
+        rec = self._post("/api/analyze-photo",
+                         {"building": "A", "filename": "a.jpg", "image_b64": _jpg_b64()})
+        self.assertEqual(len(self._get("/api/photos")), 1)
+        self._post("/api/photo-delete", {"id": rec["id"]})
+        self.assertEqual(len(self._get("/api/photos")), 0)   # 삭제되어 목록에서 사라짐
+
     def test_monitor_unchanged_is_normal(self):
         self._post("/api/monitor/baseline",
                    {"monitor_id": "m1", "image_b64": _jpg_b64((205, 205, 205))})

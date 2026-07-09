@@ -157,6 +157,7 @@ function renderPhotos(list){
         <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
           <select id="pg_${p.id}" style="flex:1">${opts}</select>
           <button class="primary" onclick="gradePhoto('${p.id}')">${hg?'수정':'확정'}</button>
+          <button onclick="delPhoto('${p.id}')" title="이 사진 삭제">🗑</button>
         </div>
       </div></div>`;
   }).join('') : '<div class="muted">아직 분석한 사진이 없습니다. 위에서 사진을 올려보세요.</div>';
@@ -166,6 +167,13 @@ async function gradePhoto(id){
   const grade=document.getElementById('pg_'+id).value;
   await fetch('/api/photo-grade',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,grade})});
+  await load();
+}
+
+async function delPhoto(id){
+  if(!confirm('이 사진을 삭제할까요? (되돌릴 수 없어요)')) return;
+  await fetch('/api/photo-delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})});
   await load();
 }
 
