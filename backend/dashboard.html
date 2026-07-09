@@ -88,6 +88,13 @@
       <span id="phStatus" class="muted"></span>
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">여러 장을 한 번에 선택할 수 있어요. 큰 사진은 올리기 전에 자동으로 줄여 빠르게 처리합니다.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+      <span class="muted">🎬 영상 넣기</span>
+      <input type="file" id="phVideo" accept="video/*">
+      <label class="muted">장면 수 <select id="phFrames"><option>6</option><option selected>10</option><option>16</option><option>24</option></select></label>
+      <button class="primary" id="phVbtn" onclick="analyzeVideo()">영상 분석</button>
+      <span class="muted" style="font-size:12px">mp4 권장 · 영상을 장면으로 나눠 각각 분석해요</span>
+    </div>
     <div id="photos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:14px"></div>
   </div>
 
@@ -167,6 +174,51 @@ function resizeToDataURL(file, maxDim){
     img.onerror=reject;
     const fr=new FileReader(); fr.onload=()=>img.src=fr.result; fr.onerror=reject; fr.readAsDataURL(file);
   });
+}
+
+// 영상 → 장면 추출 → 각 장면을 사진 분석에 넣기 (브라우저에서 프레임 추출, 서버 부담 없음)
+function seekCapture(v, t, maxDim){
+  return new Promise((res)=>{
+    const onSeeked=()=>{
+      v.removeEventListener('seeked', onSeeked);
+      const s=Math.min(1, maxDim/Math.max(v.videoWidth,v.videoHeight));
+      const cv=document.createElement('canvas');
+      cv.width=Math.max(1,Math.round(v.videoWidth*s)); cv.height=Math.max(1,Math.round(v.videoHeight*s));
+      cv.getContext('2d').drawImage(v,0,0,cv.width,cv.height);
+      res(cv.toDataURL('image/jpeg',0.85));
+    };
+    v.addEventListener('seeked', onSeeked);
+    v.currentTime=Math.min(t, (v.duration||t)-0.05);
+  });
+}
+
+async function analyzeVideo(){
+  const f=document.getElementById('phVideo').files[0];
+  const st=document.getElementById('phStatus'), btn=document.getElementById('phVbtn');
+  if(!f){ st.textContent='영상을 먼저 선택하세요'; return; }
+  const n=+document.getElementById('phFrames').value;
+  btn.disabled=true; st.textContent='영상 여는 중…';
+  const url=URL.createObjectURL(f);
+  const v=document.createElement('video'); v.src=url; v.muted=true; v.playsInline=true;
+  try{
+    await new Promise((res,rej)=>{ v.onloadeddata=()=>res(); v.onerror=()=>rej(new Error('이 영상 형식을 열 수 없어요 (mp4 권장)')); });
+    const dur=v.duration||0;
+    const bname=document.getElementById('phBuilding').value.trim();
+    let done=0, fail=0;
+    for(let i=0;i<n;i++){
+      const t=dur*(i+0.5)/n;
+      st.textContent=`영상 분석 중… ${i+1}/${n}`;
+      try{
+        const dataURL=await seekCapture(v,t,1200);
+        const rec=await fetch('/api/analyze-photo',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({building:(bname||f.name)+' ('+t.toFixed(1)+'s)', filename:f.name, image_b64:dataURL})}).then(r=>r.json());
+        rec.error?fail++:done++;
+      }catch(e){ fail++; }
+    }
+    st.textContent=`영상 완료: ${done}장면 분석${fail?`, ${fail}장면 실패`:''}. 아래에서 확인·확정하세요.`;
+  }catch(e){ st.textContent='오류: '+e.message; }
+  URL.revokeObjectURL(url); document.getElementById('phVideo').value=''; btn.disabled=false;
+  await load();
 }
 
 async function analyzePhoto(){
